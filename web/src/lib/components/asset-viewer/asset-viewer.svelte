@@ -38,9 +38,11 @@
     type StackResponseDto,
   } from '@immich/sdk';
   import { toastManager } from '@immich/ui';
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { t } from 'svelte-i18n';
-  import { fly } from 'svelte/transition';
+  import { fly, slide } from 'svelte/transition';
+
+  import { viewTransitionManager } from '$lib/managers/ViewTransitionManager.svelte';
   import Thumbnail from '../assets/thumbnail/thumbnail.svelte';
   import ActivityStatus from './activity-status.svelte';
   import ActivityViewer from './activity-viewer.svelte';
@@ -89,7 +91,7 @@
     copyImage = $bindable(),
   }: Props = $props();
 
-  const { setAssetId } = assetViewingStore;
+  const { setAssetId, invisible } = assetViewingStore;
   const {
     restartProgress: restartSlideshowProgress,
     stopProgress: stopSlideshowProgress,
@@ -157,7 +159,23 @@
     }
   };
 
+  let transitionName = $state<string | null>('hero');
+  let detailPanelTransitionName = $state<string | null>(null);
+
+  let addInfoTransition;
+  let finished;
   onMount(async () => {
+    addInfoTransition = () => {
+      detailPanelTransitionName = 'info';
+    };
+    eventManager.on('TransitionToAssetViewer', addInfoTransition);
+    eventManager.on('TransitionToTimeline', addInfoTransition);
+    finished = () => {
+      detailPanelTransitionName = null;
+      transitionName = null;
+    };
+    eventManager.on('Finished', finished);
+    // eventManager.emit('AssetViewerLoaded');
     unsubscribes.push(
       websocketEvents.on('on_upload_success', (asset) => onAssetUpdate({ event: 'upload', asset })),
       websocketEvents.on('on_asset_update', (asset) => onAssetUpdate({ event: 'update', asset })),
@@ -199,6 +217,9 @@
     }
 
     activityManager.reset();
+    eventManager.off('TransitionToAssetViewer', addInfoTransition!);
+    eventManager.off('TransitionToTimeline', addInfoTransition!);
+    eventManager.off('Finished', finished!);
   });
 
   const handleGetAllAlbums = async () => {
@@ -226,6 +247,7 @@
   };
 
   const closeViewer = () => {
+    transitionName = 'hero';
     onClose?.(asset);
   };
 
@@ -247,7 +269,6 @@
     }
 
     e?.stopPropagation();
-    preloadManager.cancel(asset);
     if (tracker.isActive()) {
       return;
     }
@@ -265,6 +286,24 @@
           }
         }
       } else if (onNavigateToAsset) {
+        const targetAsset = order === 'previous' ? previousAsset : nextAsset;
+        if (
+          globalThis.isSecureContext &&
+          preloadManager.isPreloaded(targetAsset) &&
+          $slideshowState !== SlideshowState.PlaySlideshow
+        ) {
+          // only transition if not in a slide, if the target is already preloaded, and is in a secure context
+          transitionName = order;
+          detailPanelTransitionName = 'onTop';
+
+          viewTransitionManager.startTransition(
+            new Promise<void>((resolve) => {
+              eventManager.once('AssetViewerFree', () => {
+                resolve();
+              });
+            }),
+          );
+        }
         hasNext = order === 'previous' ? await onNavigateToAsset(previousAsset) : await onNavigateToAsset(nextAsset);
       } else {
         hasNext = false;
@@ -421,7 +460,7 @@
   $effect(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     asset.id;
-    if (viewerKind !== 'PhotoViewer') {
+    if (viewerKind !== 'PhotoViewer' && viewerKind !== 'ImagePanaramaViewer') {
       eventManager.emit('AssetViewerFree');
     }
   });
@@ -454,12 +493,16 @@
 <section
   id="immich-asset-viewer"
   class="fixed start-0 top-0 grid size-full grid-cols-4 grid-rows-[64px_1fr] overflow-hidden bg-black"
+  class:invisible={$invisible}
   use:focusTrap
   bind:this={assetViewerHtmlElement}
 >
   <!-- Top navigation bar -->
   {#if $slideshowState === SlideshowState.None && !isShowEditor}
-    <div class="col-span-4 col-start-1 row-span-1 row-start-1 transition-transform">
+    <div
+      class="col-span-4 col-start-1 row-span-1 row-start-1 transition-transform"
+      style:view-transition-name="exclude"
+    >
       <AssetViewerNavBar
         {asset}
         {album}
@@ -508,11 +551,12 @@
   {/if}
 
   <!-- Asset Viewer -->
-  <div class="z-[-1] relative col-start-1 col-span-4 row-start-1 row-span-full">
+  <div class="z-[-1] relative col-start-1 col-span-4 row-start-1 row-span-full items-center flex">
     {#if viewerKind === 'StackPhotoViewer'}
       <PhotoViewer
         bind:zoomToggle
         bind:copyImage
+        {transitionName}
         asset={previewStackedAsset!}
         onPreviousAsset={() => navigateAsset('previous')}
         onNextAsset={() => navigateAsset('next')}
@@ -521,6 +565,7 @@
       />
     {:else if viewerKind === 'StackVideoViewer'}
       <VideoViewer
+        {transitionName}
         assetId={previewStackedAsset!.id}
         cacheKey={previewStackedAsset!.thumbhash}
         projectionType={previewStackedAsset!.exifInfo?.projectionType}
@@ -534,6 +579,7 @@
       />
     {:else if viewerKind === 'LiveVideoViewer'}
       <VideoViewer
+        {transitionName}
         assetId={asset.livePhotoVideoId!}
         cacheKey={asset.thumbhash}
         projectionType={asset.exifInfo?.projectionType}
@@ -544,11 +590,12 @@
         {playOriginalVideo}
       />
     {:else if viewerKind === 'ImagePanaramaViewer'}
-      <ImagePanoramaViewer bind:zoomToggle {asset} />
+      <ImagePanoramaViewer bind:zoomToggle {asset} {transitionName} />
     {:else if viewerKind === 'CropArea'}
       <CropArea {asset} />
     {:else if viewerKind === 'PhotoViewer'}
       <PhotoViewer
+        {transitionName}
         bind:zoomToggle
         bind:copyImage
         {asset}
@@ -556,10 +603,11 @@
         onNextAsset={() => navigateAsset('next')}
         {sharedLink}
         haveFadeTransition={$slideshowState !== SlideshowState.None && $slideshowTransition}
-        onFree={() => eventManager.emit('AssetViewerFree')}
+        onFree={() => tick().then(() => eventManager.emit('AssetViewerFree'))}
       />
     {:else if viewerKind === 'VideoViewer'}
       <VideoViewer
+        {transitionName}
         assetId={asset.id}
         cacheKey={asset.thumbhash}
         projectionType={asset.exifInfo?.projectionType}
@@ -601,8 +649,9 @@
 
   {#if enableDetailPanel && $slideshowState === SlideshowState.None && $isShowDetail && !isShowEditor}
     <div
-      transition:fly={{ duration: 150 }}
+      transition:slide={{ axis: 'x', duration: 150 }}
       id="detail-panel"
+      style:view-transition-name={detailPanelTransitionName}
       class="row-start-1 row-span-4 w-[360px] overflow-y-auto transition-all dark:border-l dark:border-s-immich-dark-gray bg-light"
       translate="yes"
     >

@@ -28,6 +28,7 @@
   import { fade } from 'svelte/transition';
 
   interface Props {
+    transitionName?: string | null;
     asset: AssetResponseDto;
     element?: HTMLDivElement | undefined;
     haveFadeTransition?: boolean;
@@ -43,6 +44,7 @@
   }
 
   let {
+    transitionName,
     asset,
     element = $bindable(),
     haveFadeTransition = true,
@@ -161,11 +163,30 @@
     }
   };
 
+  const calculateSize = () => {
+    const naturalWidth = loader?.naturalWidth ?? 1;
+    const naturalHeight = loader?.naturalHeight ?? 1;
+
+    const scaleX = containerWidth / naturalWidth;
+    const scaleY = containerHeight / naturalHeight;
+
+    // Use the smaller scale to ensure image fits (like object-fit: contain)
+    const scale = Math.min(scaleX, scaleY);
+
+    return {
+      width: naturalWidth * scale + 'px',
+      height: naturalHeight * scale + 'px',
+    };
+  };
+
+  let box = $derived(calculateSize());
+
   const onload = () => {
     onLoad?.();
     onFree?.();
     imageLoaded = true;
     originalImageLoaded = targetImageSize === AssetMediaSize.Fullsize || targetImageSize === 'original';
+    box = calculateSize();
   };
 
   const onerror = () => {
@@ -225,7 +246,7 @@
 <img bind:this={loader} style="display:none" src={imageLoaderUrl} alt="" aria-hidden="true" {onload} {onerror} />
 <div
   bind:this={element}
-  class="relative h-full select-none"
+  class="relative h-full w-full select-none"
   bind:clientWidth={containerWidth}
   bind:clientHeight={containerHeight}
 >
@@ -237,7 +258,7 @@
     <div
       use:zoomImageAction={{ disabled: isOcrActive }}
       {...useSwipe(onSwipe)}
-      class="h-full w-full"
+      class="h-full w-full flex"
       transition:fade={{ duration: haveFadeTransition ? assetViewerFadeDuration : 0 }}
     >
       {#if $slideshowState !== SlideshowState.None && $slideshowLook === SlideshowLook.BlurredBackground}
@@ -249,10 +270,14 @@
         />
       {/if}
       <img
+        id="img"
+        style:view-transition-name={transitionName}
+        style:width={box.width}
+        style:height={box.height}
         bind:this={$photoViewerImgElement}
         src={imageLoaderUrl}
         alt={$getAltText(toTimelineAsset(asset))}
-        class="h-full w-full {$slideshowState === SlideshowState.None
+        class="max-h-dvh w-full h-auto max-w-dvw m-auto {$slideshowState === SlideshowState.None
           ? 'object-contain'
           : slideshowLookCssMapping[$slideshowLook]}"
         draggable="false"

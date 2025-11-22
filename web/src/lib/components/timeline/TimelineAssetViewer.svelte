@@ -103,6 +103,10 @@
   };
 
   const handleClose = async (asset: { id: string }) => {
+    const awaitInit = new Promise<void>((resolve) => eventManager.once('StartViewTransition', resolve));
+    eventManager.emit('TransitionToTimeline', { id: asset.id });
+    await awaitInit;
+
     assetViewingStore.showAssetViewer(false);
     invisible = true;
     $gridScrollTarget = { at: asset.id };
